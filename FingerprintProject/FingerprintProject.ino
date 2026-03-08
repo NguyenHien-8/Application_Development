@@ -91,7 +91,7 @@ void loop() {
       break;
 
     case WS_CONNECTED: {
-      int rssi = WiFi.RSSI();
+      int8_t rssi = WiFi.RSSI();
       showSignalLevel(rssi);
       break;
     }
@@ -127,7 +127,7 @@ void showSignalLevel(int rssi) {
   unsigned long currentMillis = millis();
 
   if(currentMillis - previousMillis_Signal >= interval_SignalLevel) {
-    Serial.printf(rssi);
+    Serial.printf("RSSI = %d", rssi);
     for (uint8_t i = 0; i < numLeds; i++) digitalWrite(ledPins[i], HIGH);
     if (rssi <= -90) { // Lost Connect
       for (uint8_t i = 0; i < numLeds; i++) digitalWrite(ledPins[i], HIGH);
