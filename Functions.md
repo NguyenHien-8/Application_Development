@@ -241,4 +241,76 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'data', results);
 END;
 $$;
+
+-- ==========================================
+-- BỔ SUNG: BẢNG QUERY_FINGERPRINT
+-- ==========================================
+CREATE TABLE IF NOT EXISTS public.query_fingerprint (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    student_id TEXT UNIQUE NOT NULL REFERENCES public.students(student_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    fingerprint_id TEXT UNIQUE NOT NULL,
+    fingerprint_data TEXT DEFAULT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Bật RLS cho bảng mới
+ALTER TABLE public.query_fingerprint ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Cho phép đọc dữ liệu query_fingerprint" ON public.query_fingerprint FOR SELECT USING (true);
+
+-- ==========================================
+-- HÀM RPC ĐỂ ESP32 GỌI LÊN ĐỒNG BỘ TRẠNG THÁI
+-- ==========================================
+CREATE OR REPLACE FUNCTION public.sync_sensor_fingerprints(sensor_ids TEXT[])
+RETURNS JSONB 
+LANGUAGE plpgsql 
+SECURITY DEFINER 
+AS $$
+BEGIN
+    -- 1. Tự động đồng bộ học sinh từ bảng students sang query_fingerprint 
+    -- (Đảm bảo danh sách luôn mới nhất trước khi check vân tay)
+    INSERT INTO public.query_fingerprint (student_id, name, fingerprint_id)
+    SELECT student_id, name, fingerprint_id FROM public.students
+    ON CONFLICT (student_id) DO UPDATE
+    SET name = EXCLUDED.name,
+        fingerprint_id = EXCLUDED.fingerprint_id;
+
+    -- 2. Cập nhật thành 'Registered' cho các ID CÓ TRONG mảng sensor_ids do ESP32 gửi lên
+    UPDATE public.query_fingerprint
+    SET fingerprint_data = 'Registered'
+    WHERE fingerprint_id = ANY(sensor_ids);
+
+    -- 3. Cập nhật thành 'Not Registered' cho các ID KHÔNG CÓ TRONG mảng sensor_ids
+    UPDATE public.query_fingerprint
+    SET fingerprint_data = 'Not Registered'
+    WHERE NOT (fingerprint_id = ANY(sensor_ids)) OR fingerprint_data IS NULL;
+
+    RETURN jsonb_build_object('success', true, 'message', 'Đã đồng bộ trạng thái vân tay thành công.');
+END;
+$$;
+
+-- ==========================================
+-- PHẦN 6: BẢNG NHẬN LỆNH TỪ APP XUỐNG ESP32 (REALTIME)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS public.device_commands (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    command TEXT NOT NULL,          -- Tên lệnh, ví dụ: 'SYNC_FINGERPRINTS'
+    status TEXT DEFAULT 'pending',  -- Trạng thái: pending, completed...
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Cấu hình Row Level Security (RLS) để cho phép đọc/ghi đối với bảng lệnh
+ALTER TABLE public.device_commands ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow full access to device_commands" 
+ON public.device_commands FOR ALL USING (true) WITH CHECK (true);
+
+-- ==========================================
+-- BẬT TÍNH NĂNG SUPABASE REALTIME CHO BẢNG NÀY
+-- ==========================================
+-- Supabase yêu cầu phải add bảng vào publication 'supabase_realtime' thì WebSockets mới hoạt động
+BEGIN;
+  DROP PUBLICATION IF EXISTS supabase_realtime;
+  CREATE PUBLICATION supabase_realtime;
+COMMIT;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.device_commands;
 ```
