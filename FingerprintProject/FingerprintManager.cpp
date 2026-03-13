@@ -1,42 +1,156 @@
 #include "FingerprintManager.h"
 
-FingerprintManager::FingerprintManager(HardwareSerial& serial, uint32_t baud, uint8_t rxPin, uint8_t txPin)
-    : _serial(serial), _baud(baud), _rxPin(rxPin), _txPin(txPin), _debug(nullptr), _initialized(false), _finger(&serial) {
+FingerprintManager::FingerprintManager(HardwareSerial* serial) 
+    : detector(serial), enroller(serial), deleter(serial) {
+    
+    currentMode = MODE_DETECT;
+    isFingerOnSensor = false;
+    enrollState = STATE_IDLE;
+    targetID = 0;
+    lastCheckTime = 0;
+
+    // Reset Callbacks
+    onMatch = nullptr; onNoMatch = nullptr; onDetectError = nullptr;
+    onPromptFirst = nullptr; onPromptRelease = nullptr; onPromptSecond = nullptr;
+    onEnrollSuccess = nullptr; onEnrollError = nullptr;
+    onDeleteSuccess = nullptr; onDeleteError = nullptr;
 }
 
-bool FingerprintManager::begin() {
-    _serial.begin(_baud, SERIAL_8N1, _rxPin, _txPin);
-    _finger.begin(_baud);
+bool FingerprintManager::begin(uint8_t rxPin, uint8_t txPin, uint32_t baudRate) {
+    // Khởi tạo phần cứng (chỉ cần lấy trạng thái của 1 module là đủ biết cảm biến đã nhận)
+    bool ok = detector.begin(rxPin, txPin, baudRate);
+    enroller.begin(rxPin, txPin, baudRate);
+    deleter.begin(rxPin, txPin, baudRate);
+    return ok;
+}
 
-    if (!_finger.verifyPassword()) {
-        if (_debug) _debug->println("Fingerprint sensor not found!");
-        return false;
+// --- Đăng ký Callbacks ---
+void FingerprintManager::setOnMatchCallback(MatchCallback cb) { onMatch = cb; }
+void FingerprintManager::setOnNoMatchCallback(NoMatchCallback cb) { onNoMatch = cb; }
+void FingerprintManager::setOnDetectErrorCallback(DetectErrorCallback cb) { onDetectError = cb; }
+
+void FingerprintManager::setOnPromptFirstFinger(PromptCallback cb) { onPromptFirst = cb; }
+void FingerprintManager::setOnPromptReleaseFinger(PromptCallback cb) { onPromptRelease = cb; }
+void FingerprintManager::setOnPromptSecondFinger(PromptCallback cb) { onPromptSecond = cb; }
+void FingerprintManager::setOnEnrollSuccess(EnrollSuccessCallback cb) { onEnrollSuccess = cb; }
+void FingerprintManager::setOnEnrollError(EnrollErrorCallback cb) { onEnrollError = cb; }
+
+void FingerprintManager::setOnDeleteSuccess(DeleteSuccessCallback cb) { onDeleteSuccess = cb; }
+void FingerprintManager::setOnDeleteError(DeleteErrorCallback cb) { onDeleteError = cb; }
+
+// --- Điều hướng lệnh ---
+void FingerprintManager::startEnrollment(uint8_t id) {
+    targetID = id;
+    currentMode = MODE_ENROLL;
+    enrollState = STATE_WAIT_FIRST_FINGER;
+    if (onPromptFirst) onPromptFirst();
+}
+
+void FingerprintManager::requestDelete(uint8_t id) {
+    targetID = id;
+    currentMode = MODE_DELETE; // Sẽ xử lý ngay trong chu kỳ update tiếp theo
+}
+
+void FingerprintManager::cancelOperation() {
+    currentMode = MODE_DETECT;
+    enrollState = STATE_IDLE;
+}
+
+// --- Update Logic (Non-blocking) ---
+void FingerprintManager::update() {
+    if (millis() - lastCheckTime < checkInterval) return;
+    lastCheckTime = millis();
+
+    switch (currentMode) {
+        case MODE_DETECT: updateDetect(); break;
+        case MODE_ENROLL: updateEnroll(); break;
+        case MODE_DELETE: updateDelete(); break;
+    }
+}
+
+void FingerprintManager::updateDetect() {
+    FingerprintStatus status = detector.scan();
+
+    if (status == FP_STATUS_NO_FINGER) {
+        isFingerOnSensor = false;
+        return;
     }
 
-    _initialized = true;
-    if (_debug) _debug->println("Fingerprint manager initialized.");
-    return true;
+    if (isFingerOnSensor) return; // Chống spam khi giữ ngón tay
+    isFingerOnSensor = true;
+
+    switch (status) {
+        case FP_STATUS_MATCHED:
+            if (onMatch) onMatch(detector.getMatchedID(), detector.getConfidence());
+            break;
+        case FP_STATUS_NOT_FOUND:
+            if (onNoMatch) onNoMatch();
+            break;
+        case FP_STATUS_ERROR:
+            if (onDetectError) onDetectError();
+            break;
+        default: break;
+    }
 }
 
-// BỔ SUNG: Quét toàn bộ ID để xem ID nào đã có vân tay
-std::vector<String> FingerprintManager::getRegisteredIds() {
-    std::vector<String> registeredIds;
-    if (!_initialized) return registeredIds;
+void FingerprintManager::updateEnroll() {
+    EnrollStatus status;
 
-    if (_debug) _debug->println("Dang quet cac ID da dang ky tren AS608...");
+    switch (enrollState) {
+        case STATE_WAIT_FIRST_FINGER:
+            status = enroller.takeImageAndConvert(1);
+            if (status == ENROLL_STATUS_OK) {
+                enrollState = STATE_WAIT_RELEASE;
+                if (onPromptRelease) onPromptRelease();
+            } else if (status != ENROLL_STATUS_NO_FINGER) {
+                if (onEnrollError) onEnrollError("Failed to read first image.");
+                cancelOperation(); // Trở về Detect
+            }
+            break;
+
+        case STATE_WAIT_RELEASE:
+            if (enroller.isFingerRemoved()) {
+                enrollState = STATE_WAIT_SECOND_FINGER;
+                if (onPromptSecond) onPromptSecond();
+            }
+            break;
+
+        case STATE_WAIT_SECOND_FINGER:
+            status = enroller.takeImageAndConvert(2);
+            if (status == ENROLL_STATUS_OK) {
+                EnrollStatus finalStatus = enroller.createAndStore(targetID);
+                if (finalStatus == ENROLL_STATUS_OK) {
+                    if (onEnrollSuccess) onEnrollSuccess(targetID);
+                } else if (finalStatus == ENROLL_STATUS_MATCH_FAIL) {
+                    if (onEnrollError) onEnrollError("Fingerprints did not match.");
+                } else {
+                    if (onEnrollError) onEnrollError("Failed to store model in memory.");
+                }
+                cancelOperation(); // Trở về Detect
+            } else if (status != ENROLL_STATUS_NO_FINGER) {
+                if (onEnrollError) onEnrollError("Failed to read second image.");
+                cancelOperation(); // Trở về Detect
+            }
+            break;
+            
+        default: break;
+    }
+}
+
+void FingerprintManager::updateDelete() {
+    DeleteStatus status = deleter.remove(targetID);
     
-    // Quét từ ID 1 đến 127 (dung lượng phổ biến của AS608)
-    for (uint16_t id = 1; id <= 127; id++) {
-        // loadModel trả về FINGERPRINT_OK nếu template tồn tại ở vị trí ID đó
-        if (_finger.loadModel(id) == FINGERPRINT_OK) {
-            registeredIds.push_back(String(id));
+    if (status == DELETE_STATUS_OK) {
+        if (onDeleteSuccess) onDeleteSuccess(targetID);
+    } else {
+        if (onDeleteError) {
+            const char* msg = "Unknown Error";
+            if (status == DELETE_STATUS_BAD_LOCATION) msg = "Empty ID or Bad Location";
+            else if (status == DELETE_STATUS_COMM_ERR) msg = "Communication Error";
+            onDeleteError(targetID, msg);
         }
     }
     
-    if (_debug) {
-        _debug->print("Tim thay ");
-        _debug->print(registeredIds.size());
-        _debug->println(" van tay da dang ky.");
-    }
-    return registeredIds;
+    // Xóa xong, tự động trở về chế độ Detect
+    cancelOperation(); 
 }

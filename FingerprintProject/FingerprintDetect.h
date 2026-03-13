@@ -1,58 +1,34 @@
 #ifndef FINGERPRINT_DETECT_H
 #define FINGERPRINT_DETECT_H
 
-#include <Arduino.h>
 #include <Adafruit_Fingerprint.h>
+
+// Các trạng thái dễ hiểu được trừu tượng hóa từ thư viện gốc
+enum FingerprintStatus {
+    FP_STATUS_IDLE,       // Không có gì xảy ra
+    FP_STATUS_MATCHED,    // Vân tay khớp
+    FP_STATUS_NOT_FOUND,  // Quét thành công nhưng không có trong cơ sở dữ liệu
+    FP_STATUS_NO_FINGER,  // Không có ngón tay trên cảm biến
+    FP_STATUS_ERROR       // Lỗi giao tiếp hoặc hình ảnh quá mờ
+};
 
 class FingerprintDetect {
 public:
-    /**
-     * Constructor
-     * @param finger Con trỏ đến đối tượng Adafruit_Fingerprint dùng chung
-     */
-    FingerprintDetect(Adafruit_Fingerprint* finger);
-
-    /**
-     * Bật/tắt debug.
-     */
-    void setDebug(Stream* stream);
-
-    /**
-     * Quét và tìm kiếm vân tay (dùng fingerSearch).
-     * @param confidence Tham chiếu lưu độ tin cậy (0‑255)
-     * @return ID vân tay (1‑127) nếu tìm thấy,
-     *         -1 nếu không có ngón tay,
-     *         số âm khác nếu lỗi (xem Adafruit_Fingerprint.h).
-     */
-    int16_t detect(uint16_t &confidence);
-
-    /**
-     * Quét nhanh (dùng fingerFastSearch).
-     */
-    int16_t fastDetect(uint16_t &confidence);
-
-    /**
-     * Lấy độ tin cậy của lần detect thành công cuối.
-     */
-    uint16_t getConfidence() const { return _lastConfidence; }
-
-    /**
-     * Lấy số lượng mẫu hiện có trong cảm biến.
-     */
-    uint16_t getTemplateCount() const { return _templateCount; }
-
-    /**
-     * Cập nhật số lượng mẫu từ cảm biến.
-     */
-    void updateTemplateCount();
+    FingerprintDetect(HardwareSerial* serial);
+    bool begin(uint8_t rxPin, uint8_t txPin, uint32_t baudRate = 57600);
+    
+    // Hàm thực hiện quét và trả về trạng thái rút gọn
+    FingerprintStatus scan();
+    
+    // Lấy thông tin sau khi quét thành công
+    uint16_t getMatchedID();
+    uint16_t getConfidence();
 
 private:
-    Adafruit_Fingerprint* _finger;
-    Stream* _debug;
-    uint16_t _lastConfidence;
-    uint16_t _templateCount;
-
-    int16_t performSearch(bool useFastSearch, uint16_t &confidence);
+    Adafruit_Fingerprint* finger;
+    HardwareSerial* hwSerial;
+    uint16_t matchedID;
+    uint16_t matchedConfidence;
 };
 
 #endif

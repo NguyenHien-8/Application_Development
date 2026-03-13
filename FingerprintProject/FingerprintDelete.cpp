@@ -1,52 +1,26 @@
 #include "FingerprintDelete.h"
 
-FingerprintDelete::FingerprintDelete(Adafruit_Fingerprint* finger)
-    : _finger(finger), _debug(nullptr), _lastError(0) {
+FingerprintDelete::FingerprintDelete(HardwareSerial* serial) {
+    hwSerial = serial;
+    finger = new Adafruit_Fingerprint(hwSerial);
 }
 
-void FingerprintDelete::setDebug(Stream* stream) {
-    _debug = stream;
+bool FingerprintDelete::begin(uint8_t rxPin, uint8_t txPin, uint32_t baudRate) {
+    hwSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
+    finger->begin(baudRate);
+    delay(5);
+    return finger->verifyPassword();
 }
 
-uint8_t FingerprintDelete::deleteFingerprint(uint8_t id) {
-    if (!_finger) return 0xFF;
-    if (id < 1 || id > 127) {
-        if (_debug) _debug->println("ID must be between 1 and 127");
-        _lastError = 0xFE;
-        return _lastError;
-    }
-    if (_debug) { _debug->print("Deleting ID #"); _debug->println(id); }
-
-    uint8_t p = _finger->deleteModel(id);
-    _lastError = p;
-
-    if (p == FINGERPRINT_OK) {
-        if (_debug) _debug->println("Deleted successfully.");
-    } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
-        if (_debug) _debug->println("Communication error");
-    } else if (p == FINGERPRINT_BADLOCATION) {
-        if (_debug) _debug->println("Invalid location");
-    } else if (p == FINGERPRINT_FLASHERR) {
-        if (_debug) _debug->println("Flash write error");
-    } else {
-        if (_debug) { _debug->print("Unknown error: 0x"); _debug->println(p, HEX); }
-    }
-    return p;
-}
-
-uint8_t FingerprintDelete::deleteAll() {
-    if (!_finger) return 0xFF;
-    if (_debug) _debug->println("Deleting ALL fingerprints...");
-
-    uint8_t p = _finger->emptyDatabase();
-    _lastError = p;
-
-    if (p == FINGERPRINT_OK) {
-        if (_debug) _debug->println("All fingerprints deleted.");
-    } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
-        if (_debug) _debug->println("Communication error");
-    } else {
-        if (_debug) { _debug->print("Unknown error: 0x"); _debug->println(p, HEX); }
-    }
-    return p;
+DeleteStatus FingerprintDelete::remove(uint8_t id) {
+    // Gọi lệnh xóa mô hình vân tay từ thư viện Adafruit
+    uint8_t p = finger->deleteModel(id);
+    
+    // Che giấu mã lỗi thư viện bằng các trạng thái dễ hiểu hơn
+    if (p == FINGERPRINT_OK) return DELETE_STATUS_OK;
+    if (p == FINGERPRINT_PACKETRECIEVEERR) return DELETE_STATUS_COMM_ERR;
+    if (p == FINGERPRINT_BADLOCATION) return DELETE_STATUS_BAD_LOCATION;
+    if (p == FINGERPRINT_FLASHERR) return DELETE_STATUS_FLASH_ERR;
+    
+    return DELETE_STATUS_UNKNOWN;
 }

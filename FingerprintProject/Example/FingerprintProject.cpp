@@ -8,15 +8,15 @@
 #include "FingerprintEnroll.h"
 #include "FingerprintManager.h"
 
-const char *ssid = "TINIHI"; 
-const char *password = "thanhnguyen201077";   
+const char *ssid = "TINIHI"; // TINIHI
+const char *password = "thanhnguyen201077"; // thanhnguyen201077  
 const uint8_t ledPins[] = {7, 6, 5, 4}; 
 const uint8_t numLeds = 4;
 
 // --- INFO SUPABASE ---
-const char* supabaseHost = "lzpngxifvvmurwwfoskw.supabase.co"; 
-const char* supabaseSyncUrl = "https://lzpngxifvvmurwwfoskw.supabase.co/rest/v1/rpc/sync_sensor_fingerprints";
-const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx6cG5neGlmdnZtdXJ3d2Zvc2t3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3MjI0ODksImV4cCI6MjA4ODI5ODQ4OX0.CstZrfW8_APLUSypHRh9ORHek_RN2OPgplEthzH3xGM";
+const char* supabaseHost = "sczadjvbayylqoinevmv.supabase.co"; 
+const char* supabaseSyncUrl = "https://sczadjvbayylqoinevmv.supabase.co/rest/v1/rpc/sync_sensor_fingerprints";
+const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjemFkanZiYXl5bHFvaW5ldm12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMjQ3ODAsImV4cCI6MjA4ODkwMDc4MH0.tslWog1sadkKcLUQ2_GC77tggb0rbyEZNmZP8copPr0";
 
 FingerprintManager fpManager(Serial2, 57600, 15, 16);
 WebSocketsClient webSocket; 

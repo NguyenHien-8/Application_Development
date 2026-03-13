@@ -36,7 +36,7 @@ void setup() {
 
     fpManager.setOnMatchCallback(onFingerMatch);
     fpManager.setOnNoMatchCallback(onFingerNoMatch);
-    fpManager.setOnDetectErrorCallback(onFingerError);
+    fpManager.setOnErrorCallback(onFingerError);
     
     Serial.println("System is ready. Waiting for valid finger...");
 }
