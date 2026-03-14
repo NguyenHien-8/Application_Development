@@ -2,7 +2,6 @@
 #include <HTTPClient.h>      
 #include <ArduinoJson.h>     
 #include <WebSocketsClient.h> 
-#include <ESPSupabase.h>
 #include <vector>
 #include <Adafruit_Fingerprint.h>
 
@@ -17,11 +16,12 @@ const uint8_t ledPins[] = {7, 6, 5, 4};
 const uint8_t numLeds = 4;
 
 // --- INFO SUPABASE ---
-const char* supabaseHost = "sczadjvbayylqoinevmv.supabase.co"; 
-const char* supabaseSyncUrl = "https://sczadjvbayylqoinevmv.supabase.co/rest/v1/rpc/sync_sensor_fingerprints";
-const char* supabaseUpdateStatusUrl = "https://sczadjvbayylqoinevmv.supabase.co/rest/v1/rpc/update_enroll_status"; 
-const char* supabaseDeleteStatusUrl = "https://sczadjvbayylqoinevmv.supabase.co/rest/v1/rpc/update_delete_status"; // API Xóa
-const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjemFkanZiYXl5bHFvaW5ldm12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMjQ3ODAsImV4cCI6MjA4ODkwMDc4MH0.tslWog1sadkKcLUQ2_GC77tggb0rbyEZNmZP8copPr0";
+const char* supabaseHost = "qcumqkwxprivtkqlbgle.supabase.co"; 
+const char* supabaseSyncUrl = "https://qcumqkwxprivtkqlbgle.supabase.co/rest/v1/rpc/sync_sensor_fingerprints";
+const char* supabaseUpdateStatusUrl = "https://qcumqkwxprivtkqlbgle.supabase.co/rest/v1/rpc/update_enroll_status"; 
+const char* supabaseDeleteStatusUrl = "https://qcumqkwxprivtkqlbgle.supabase.co/rest/v1/rpc/update_delete_status"; 
+const char* supabaseAttendanceUrl = "https://qcumqkwxprivtkqlbgle.supabase.co/rest/v1/rpc/log_attendance_by_fingerprint"; 
+const char* supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjdW1xa3d4cHJpdnRrcWxiZ2xlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MzIyNTEsImV4cCI6MjA4OTAwODI1MX0.FihwsXgW7lte-3hO0lQ3Ij6qc9ZPbsLBwFTRpMvuYco";
 
 FingerprintManager fpManager(&Serial2);
 WebSocketsClient webSocket; 
@@ -31,6 +31,7 @@ unsigned long previousMillis_Signal = 0;
 unsigned long previousMillis_Disconnect = 0; 
 unsigned long previousMillis_Restart = 0; 
 unsigned long lastHeartbeat = 0; 
+unsigned long lastMatchTime = 0; 
 
 const uint16_t interval_SignalLevel = 500;
 const uint16_t interval_disconnect = 20000;
@@ -40,7 +41,7 @@ bool shouldSyncFingerprints = false;
 bool hasBootSynced = false;
 bool isWebSocketInit = false; 
 String currentEnrollIdStr = ""; 
-String currentDeleteIdStr = ""; // Lưu ID đang được yêu cầu xóa
+String currentDeleteIdStr = ""; 
 
 enum WifiState { WS_DISCONNECTED, WS_CONNECTING, WS_CONNECTED };
 volatile WifiState currentWifiState = WS_DISCONNECTED;
@@ -55,6 +56,7 @@ void SyncFingerprintsToSupabase();
 void initWebSocket();
 void updateSupabaseEnrollStatus(String fp_id, String status, String message);
 void updateSupabaseDeleteStatus(String fp_id, String status, String message);
+void logAttendanceToSupabase(uint16_t fp_id);
 
 // XỬ LÝ SỰ KIỆN WEBSOCKET
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
@@ -73,42 +75,39 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     case WStype_TEXT: {
       String msg = (char*)payload;
       
-      // Xử lý lệnh SYNC
       if(msg.indexOf("\"type\":\"INSERT\"") > 0 && msg.indexOf("SYNC_FINGERPRINTS") > 0) {
-        Serial.println("\n[SUPABASE REALTIME] >> NHAN LENH: Yeu cau dong bo van tay!");
+        Serial.println("\n[REALTIME] >> NHAN LENH: Dong bo van tay!");
         shouldSyncFingerprints = true; 
       }
       
-      // Xử lý lệnh ENROLL_xxx
       if(msg.indexOf("\"type\":\"INSERT\"") > 0 && msg.indexOf("ENROLL_") > 0) {
         int cmdIndex = msg.indexOf("ENROLL_");
         int endQuoteIndex = msg.indexOf("\"", cmdIndex);
         if(cmdIndex != -1 && endQuoteIndex != -1) {
-          String enrollCmd = msg.substring(cmdIndex, endQuoteIndex); // "ENROLL_15"
-          String idStr = enrollCmd.substring(7); // "15"
+          String enrollCmd = msg.substring(cmdIndex, endQuoteIndex); 
+          String idStr = enrollCmd.substring(7); 
           uint8_t id = idStr.toInt();
           
           if (id > 0 && id <= 127) {
-            Serial.printf("\n[SUPABASE REALTIME] >> NHAN LENH: Dang ky van tay ID = %d\n", id);
+            Serial.printf("\n[REALTIME] >> NGAT MODE: Chuyen sang Dang ky van tay ID = %d\n", id);
             currentEnrollIdStr = idStr;
             fpManager.startEnrollment(id); 
           }
         }
       }
 
-      // Xử lý lệnh DELETE_xxx
       if(msg.indexOf("\"type\":\"INSERT\"") > 0 && msg.indexOf("DELETE_") > 0) {
         int cmdIndex = msg.indexOf("DELETE_");
         int endQuoteIndex = msg.indexOf("\"", cmdIndex);
         if(cmdIndex != -1 && endQuoteIndex != -1) {
-          String deleteCmd = msg.substring(cmdIndex, endQuoteIndex); // "DELETE_15"
-          String idStr = deleteCmd.substring(7); // "15"
+          String deleteCmd = msg.substring(cmdIndex, endQuoteIndex); 
+          String idStr = deleteCmd.substring(7); 
           uint8_t id = idStr.toInt();
           
           if (id > 0 && id <= 127) {
-            Serial.printf("\n[SUPABASE REALTIME] >> NHAN LENH: Xoa van tay ID = %d\n", id);
+            Serial.printf("\n[REALTIME] >> NGAT MODE: Chuyen sang Xoa van tay ID = %d\n", id);
             currentDeleteIdStr = idStr;
-            fpManager.requestDelete(id); // Kích hoạt State Machine xóa
+            fpManager.requestDelete(id); 
           }
         }
       }
@@ -129,7 +128,6 @@ void initWebSocket() {
 void WiFiEvent(WiFiEvent_t event) {
   switch (event) {
     case ARDUINO_EVENT_WIFI_STA_START:
-      Serial.println("\n--- BAT DAU KET NOI WIFI ---");
       currentWifiState = WS_CONNECTING;
       break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
@@ -149,6 +147,29 @@ void WiFiEvent(WiFiEvent_t event) {
 }
 
 // --- HTTP REQUESTS CHO SUPABASE ---
+void logAttendanceToSupabase(uint16_t fp_id) {
+  if (currentWifiState != WS_CONNECTED) return;
+  StaticJsonDocument<256> doc;
+  doc["p_fingerprint_id"] = String(fp_id);
+  String requestBody;
+  serializeJson(doc, requestBody);
+
+  HTTPClient http;
+  http.begin(supabaseAttendanceUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", supabaseAnonKey);
+  http.addHeader("Authorization", String("Bearer ") + String(supabaseAnonKey));
+  
+  int httpResponseCode = http.POST(requestBody);
+  if (httpResponseCode > 0) {
+    String payload = http.getString();
+    Serial.printf("[HTTP] Log diem danh hoan tat. Supabase tra ve: %s\n", payload.c_str());
+  } else {
+    Serial.printf("[HTTP ERROR] Loi diem danh: %d\n", httpResponseCode);
+  }
+  http.end();
+}
+
 void updateSupabaseEnrollStatus(String fp_id, String status, String message = "") {
   if (currentWifiState != WS_CONNECTED) return;
   StaticJsonDocument<256> doc;
@@ -200,35 +221,74 @@ void setup() {
   if (fpManager.begin(16, 17, 57600)) {
     Serial.println(">> Khoi tao cam bien van tay thanh cong!");
   } else {
-    Serial.println(">> LOI: Khong tim thay cam bien van tay!");
+    Serial.println(">> [ERROR]: Khong tim thay cam bien van tay!");
   }
 
-  // --- LIÊN KẾT CALLBACKS CHO ENROLL ---
-  fpManager.setOnPromptFirstFinger([]() { Serial.println("[ENROLL] -> Dat van tay lan 1..."); });
-  fpManager.setOnPromptReleaseFinger([]() { Serial.println("[ENROLL] -> Rut ngon tay ra..."); });
-  fpManager.setOnPromptSecondFinger([]() { Serial.println("[ENROLL] -> Dat van tay lan 2..."); });
+  // =======================================================
+  // 1. LIÊN KẾT CALLBACKS CHO DETECT (ĐIỂM DANH HỌC SINH)
+  // =======================================================
+  fpManager.setOnMatchCallback([](uint16_t id, uint16_t confidence) {
+    if (millis() - lastMatchTime > 3000) {
+      lastMatchTime = millis();
+      Serial.printf("\n================================================\n");
+      Serial.printf(" [DETECT] Van tay ID %d khop! (Do chinh xac: %d)\n", id, confidence);
+      Serial.println(" -> Tien hanh ghi nhan diem danh len Supabase...");
+      Serial.printf("================================================\n");
+      logAttendanceToSupabase(id);
+    }
+  });
 
+  fpManager.setOnNoMatchCallback([]() {
+    if (millis() - lastMatchTime > 3000) {
+      lastMatchTime = millis();
+      Serial.println("\n[DETECT] -> Van tay khong hop le hoac khong co trong CSDL!");
+    }
+  });
+
+  // =======================================================
+  // 2. LIÊN KẾT CALLBACKS CHO ENROLL
+  // =======================================================
+  fpManager.setOnPromptFirstFinger([]() { 
+    Serial.println("[ENROLL] -> Vui long dat van tay lan 1..."); 
+  });
+  
+  fpManager.setOnPromptReleaseFinger([]() { 
+    Serial.println("[ENROLL] -> Da doc lan 1! Vui long rut ngon tay ra..."); 
+  });
+  
+  fpManager.setOnPromptSecondFinger([]() { 
+    Serial.println("[ENROLL] -> Vui long dat lai van tay lan 2..."); 
+    // SAU KHI YÊU CẦU ĐẶT VÂN TAY LẦN 1 THÀNH CÔNG, CẬP NHẬT TRẠNG THÁI WAITING_SCAN_2
+    updateSupabaseEnrollStatus(currentEnrollIdStr, "waiting_scan_2", "Waiting for second scan");
+  });
+
+  // KHI KHỚP -> HOÀN TẤT, TRỞ VỀ DETECT
   fpManager.setOnEnrollSuccess([](uint16_t id) {
     Serial.printf("\n===================================\n");
     Serial.printf(" Fingerprint Enroll Success! ID: %d\n", id);
     Serial.printf("===================================\n");
     updateSupabaseEnrollStatus(currentEnrollIdStr, "completed", "Enroll Success");
+    Serial.println(">> [SYSTEM] ESP32 tu dong quay lai che do DETECT_MODE.");
   });
 
+  // KHI KHÔNG KHỚP / LỖI -> FAILED, TRỞ VỀ DETECT
   fpManager.setOnEnrollError([](const char* msg) {
     Serial.printf("\n===================================\n");
     Serial.printf(" Fingerprint Enroll Failure! Reason: %s\n", msg);
     Serial.printf("===================================\n");
     updateSupabaseEnrollStatus(currentEnrollIdStr, "failed", msg);
+    Serial.println(">> [SYSTEM] ESP32 tu dong quay lai che do DETECT_MODE.");
   });
 
-  // --- LIÊN KẾT CALLBACKS CHO DELETE ---
+  // =======================================================
+  // 3. LIÊN KẾT CALLBACKS CHO DELETE
+  // =======================================================
   fpManager.setOnDeleteSuccess([](uint8_t id) {
     Serial.printf("\n===================================\n");
     Serial.printf(" Fingerprint Delete Success! ID: %d da bi xoa.\n", id);
     Serial.printf("===================================\n");
-    // Chỉ gọi HTTP POST khi xóa thành công trên module
     updateSupabaseDeleteStatus(currentDeleteIdStr, "completed", "Delete Success");
+    Serial.println(">> [SYSTEM] ESP32 tu dong quay lai che do DETECT_MODE.");
   });
 
   fpManager.setOnDeleteError([](uint8_t id, const char* msg) {
@@ -236,6 +296,7 @@ void setup() {
     Serial.printf(" Fingerprint Delete Failure! ID: %d, Lỗi: %s\n", id, msg);
     Serial.printf("===================================\n");
     updateSupabaseDeleteStatus(currentDeleteIdStr, "failed", msg);
+    Serial.println(">> [SYSTEM] ESP32 tu dong quay lai che do DETECT_MODE.");
   });
 
   WiFi.onEvent(WiFiEvent);
@@ -251,8 +312,6 @@ void loop() {
 
     case WS_CONNECTED: {
       webSocket.loop();
-      
-      // Hàm update duy trì logic của Cảm biến (Detect, Enroll, Delete - Non-blocking)
       fpManager.update();
       
       if (millis() - lastHeartbeat > 30000) {

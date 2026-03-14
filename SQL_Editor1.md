@@ -1,6 +1,9 @@
 # Supabase Database
 
 ```sql
+-- ==========================================
+-- PHẦN CƠ BẢN: EXTENSION & TOKEN
+-- ==========================================
 -- Kích hoạt extension pgcrypto để mã hóa password
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -58,15 +61,15 @@ BEGIN
     SELECT teacher_id INTO v_db_teacher_id FROM public.teacher_ids WHERE email = p_email;
 
     IF v_db_email IS NULL AND v_db_teacher_id IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Both The Email And Teacher Id Are Incorrect');
+        RETURN jsonb_build_object('success', false, 'message', 'Cả địa chỉ email và ID giáo viên đều không chính xác.');
     ELSIF v_db_email IS NOT NULL AND v_db_email != p_email THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Incorrect Email Sign Up');
+        RETURN jsonb_build_object('success', false, 'message', 'Đăng ký email không chính xác.');
     ELSIF v_db_teacher_id IS NOT NULL AND v_db_teacher_id != p_teacher_id THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Incorrect Teacher Id Sign Up');
+        RETURN jsonb_build_object('success', false, 'message', 'Đăng ký Teacher Id không chính xác.');
     ELSIF v_db_email = p_email AND v_db_teacher_id = p_teacher_id THEN
         IF EXISTS (SELECT 1 FROM auth.users WHERE email = p_email) OR 
            EXISTS (SELECT 1 FROM public.teachers WHERE teacher_id = p_teacher_id) THEN
-            RETURN jsonb_build_object('success', false, 'message', 'The teacher has already been registered.');
+            RETURN jsonb_build_object('success', false, 'message', 'Giáo viên đã được đăng ký.');
         END IF;
 
         v_new_user_id := gen_random_uuid();
@@ -91,9 +94,9 @@ BEGIN
             'email', NOW(), NOW(), NOW()
         );
 
-        RETURN jsonb_build_object('success', true, 'message', 'Sign Up Success');
+        RETURN jsonb_build_object('success', true, 'message', 'Đăng ký thành công.');
     ELSE
-        RETURN jsonb_build_object('success', false, 'message', 'Invalid credentials');
+        RETURN jsonb_build_object('success', false, 'message', 'Thông tin đăng nhập không hợp lệ.');
     END IF;
 EXCEPTION WHEN OTHERS THEN
     RETURN jsonb_build_object('success', false, 'message', 'Database Error: ' || SQLERRM);
@@ -116,13 +119,13 @@ BEGIN
     WHERE u.email = p_email;
 
     IF v_user_id IS NULL THEN 
-        RETURN jsonb_build_object('success', false, 'message', 'Incorrect Email Sign In'); 
+        RETURN jsonb_build_object('success', false, 'message', 'Đăng nhập thành công.'); 
     END IF;
 
     IF v_encrypted_pw = crypt(p_password, v_encrypted_pw) THEN
-        RETURN jsonb_build_object('success', true, 'message', 'Sign In Success', 'email', p_email, 'teacher_id', v_teacher_id);
+        RETURN jsonb_build_object('success', true, 'message', 'Đăng nhập thành công.', 'email', p_email, 'teacher_id', v_teacher_id);
     ELSE
-        RETURN jsonb_build_object('success', false, 'message', 'Incorrect Password Sign In');
+        RETURN jsonb_build_object('success', false, 'message', 'Đăng nhập bằng mật khẩu không chính xác.');
     END IF;
 END;
 $$;
@@ -176,31 +179,29 @@ CREATE TABLE IF NOT EXISTS public.students (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Xóa Ràng buộc cũ và áp dụng Ràng buộc mới (Chuẩn H + 6 số)
+-- Ràng buộc định dạng mã học sinh
 ALTER TABLE public.students DROP CONSTRAINT IF EXISTS chk_student_id_format;
 ALTER TABLE public.students ADD CONSTRAINT chk_student_id_format CHECK (student_id ~ '^H[0-9]{6}$');
 
 CREATE INDEX IF NOT EXISTS idx_students_class_id ON public.students(class_id);
 
--- TRIGGER KIỂM TRA ĐỊNH DẠNG TỪ MỌI NƠI
+-- TRIGGER KIỂM TRA ĐỊNH DẠNG MÃ HỌC SINH
 CREATE OR REPLACE FUNCTION public.format_student_id_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Ép kiểu In hoa, bỏ khoảng trắng ở đầu/cuối trước khi Insert/Update
     NEW.student_id := UPPER(TRIM(NEW.student_id));
     
     IF length(NEW.student_id) != 7 THEN
-        RAISE EXCEPTION 'The student ID must have exactly 7 characters.';
+        RAISE EXCEPTION 'Mã số sinh viên phải có chính xác 7 ký tự.';
     END IF;
     
     IF NEW.student_id !~ '^H[0-9]{6}$' THEN
-        RAISE EXCEPTION 'Student IDs must be in the format H + 6 digits (Example: H230501).';
+        RAISE EXCEPTION 'Mã số sinh viên phải có định dạng H + 6 chữ số (Ví dụ: H230501).';
     END IF;
 
-    -- KIỂM TRA MỚI CẤP ĐỘ DATABASE: Kiểm tra X2 (2 số giữa) khớp với date_of_birth
     IF NEW.date_of_birth IS NOT NULL THEN
         IF SUBSTRING(NEW.student_id FROM 4 FOR 2) != TO_CHAR(NEW.date_of_birth, 'YY') THEN
-            RAISE EXCEPTION 'The student ID of component X2 must match the last two digits of the year of birth.';
+            RAISE EXCEPTION 'Mã số sinh viên của thành phần X2 phải trùng khớp với hai chữ số cuối của năm sinh.';
         END IF;
     END IF;
 
@@ -215,7 +216,7 @@ FOR EACH ROW
 EXECUTE FUNCTION public.format_student_id_trigger();
 
 -- ==========================================
--- PHẦN 3: THIẾT LẬP PHÂN QUYỀN RLS CƠ BẢN
+-- PHẦN 3: THIẾT LẬP PHÂN QUYỀN RLS
 -- ==========================================
 ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.teacher_class ENABLE ROW LEVEL SECURITY;
@@ -255,12 +256,10 @@ DECLARE
     v_duplicate_students TEXT;  
     v_results JSONB;
 BEGIN
-    -- 1. Kiểm tra xác thực Token
     IF auth.uid() IS NULL THEN 
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized user.'); 
+        RETURN jsonb_build_object('success', false, 'message', 'Người dùng trái phép.'); 
     END IF;
 
-    -- 2. Tự động lấy class_id VÀ academic_year mà giáo viên đang phụ trách
     SELECT tc.class_id, c.academic_year INTO v_inferred_class_id, v_academic_year
     FROM public.teacher_class tc
     JOIN public.teachers t ON tc.teacher_id = t.teacher_id
@@ -269,22 +268,17 @@ BEGIN
     LIMIT 1;
 
     IF v_inferred_class_id IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'The teacher has not yet been assigned to manage any class.');
+        RETURN jsonb_build_object('success', false, 'message', 'Giáo viên này hiện chưa được phân công phụ trách lớp nào.');
     END IF;
 
-    -- 3. VALIDATION 1: KIỂM TRA ĐỊNH DẠNG REGEX THEO YÊU CẦU
     SELECT string_agg(x.student_id, ', ') INTO v_invalid_format_students
     FROM jsonb_to_recordset(payload) AS x(action TEXT, student_id TEXT)
     WHERE x.action = 'save' AND UPPER(TRIM(x.student_id)) !~ '^H[0-9]{6}$';
 
     IF v_invalid_format_students IS NOT NULL THEN
-        RETURN jsonb_build_object(
-            'success', false, 
-            'message', 'Student IDs must be in the format H + 6 digits (Example: H230501). Error codes: ' || v_invalid_format_students
-        );
+        RETURN jsonb_build_object('success', false, 'message', 'Mã số sinh viên phải có định dạng H + 6 chữ số (Ví dụ: H230501). Mã lỗi: ' || v_invalid_format_students);
     END IF;
 
-    -- 4. VALIDATION 2A: KIỂM TRA NĂM NHẬP HỌC (X1) KHỚP VỚI ACADEMIC_YEAR
     v_start_year_suffix := SUBSTRING(SPLIT_PART(v_academic_year, '-', 1) FROM 3 FOR 2);
     
     SELECT string_agg(x.student_id, ', ') INTO v_invalid_year_students
@@ -292,57 +286,35 @@ BEGIN
     WHERE x.action = 'save' AND SUBSTRING(UPPER(TRIM(x.student_id)) FROM 2 FOR 2) != v_start_year_suffix;
 
     IF v_invalid_year_students IS NOT NULL THEN
-        RETURN jsonb_build_object(
-            'success', false, 
-            'message', 'The student ID of component X1 does not match the start year of the school year (' || v_academic_year || '). Request a re-check: ' || v_invalid_year_students
-        );
+        RETURN jsonb_build_object('success', false, 'message', 'Mã số sinh viên của thành phần X1 không trùng khớp với năm bắt đầu của năm học (' || v_academic_year || '). Yêu cầu kiểm tra lại: ' || v_invalid_year_students);
     END IF;
 
-    -- 5. VALIDATION 2B: KIỂM TRA NĂM SINH (X2) KHỚP VỚI DATE_OF_BIRTH
     SELECT string_agg(x.student_id, ', ') INTO v_invalid_dob_students
     FROM jsonb_to_recordset(payload) AS x(action TEXT, student_id TEXT, date_of_birth DATE)
-    WHERE x.action = 'save' 
-      AND x.date_of_birth IS NOT NULL 
-      AND SUBSTRING(UPPER(TRIM(x.student_id)) FROM 4 FOR 2) != TO_CHAR(x.date_of_birth, 'YY');
+    WHERE x.action = 'save' AND x.date_of_birth IS NOT NULL AND SUBSTRING(UPPER(TRIM(x.student_id)) FROM 4 FOR 2) != TO_CHAR(x.date_of_birth, 'YY');
 
     IF v_invalid_dob_students IS NOT NULL THEN
-        RETURN jsonb_build_object(
-            'success', false, 
-            'message', 'The student ID of component X2 does not match the year of birth. Request a re-check: ' || v_invalid_dob_students
-        );
+        RETURN jsonb_build_object('success', false, 'message', 'Mã số sinh viên của thành phần X2 không trùng khớp với năm sinh. Yêu cầu kiểm tra lại: ' || v_invalid_dob_students);
     END IF;
 
-    -- 6. VALIDATION 3: CHỐNG "CƯỚP LỚP" (ANTI-CLASS STEALING)
     SELECT string_agg(x.student_id, ', ') INTO v_stolen_students
     FROM jsonb_to_recordset(payload) AS x(action TEXT, student_id TEXT)
     JOIN public.students s ON s.student_id = UPPER(TRIM(x.student_id))
     WHERE x.action = 'save' AND s.class_id != v_inferred_class_id;
 
     IF v_stolen_students IS NOT NULL THEN
-        RETURN jsonb_build_object(
-            'success', false, 
-            'message', 'The following student IDs are currently enrolled in a different teacher is class. Please delete the information from the old class before adding a new one: ' || v_stolen_students
-        );
+        RETURN jsonb_build_object('success', false, 'message', 'Các mã số sinh viên sau hiện đang theo học lớp của giáo viên khác. Vui lòng xóa thông tin từ lớp cũ trước khi thêm lớp mới: ' || v_stolen_students);
     END IF;
 
-    -- 7. VALIDATION 4: KIỂM TRA THÔNG TIN TRÙNG KHỚP HOÀN TOÀN (EXACT DUPLICATE)
     SELECT string_agg(x.student_id, ', ') INTO v_duplicate_students
     FROM jsonb_to_recordset(payload) AS x(action TEXT, student_id TEXT, name TEXT, fingerprint_id TEXT, gender TEXT, date_of_birth DATE)
     JOIN public.students s ON s.student_id = UPPER(TRIM(x.student_id))
-    WHERE x.action = 'save' 
-      AND s.name = TRIM(x.name)
-      AND s.gender IS NOT DISTINCT FROM TRIM(x.gender)
-      AND s.date_of_birth IS NOT DISTINCT FROM x.date_of_birth
-      AND s.fingerprint_id IS NOT DISTINCT FROM NULLIF(TRIM(x.fingerprint_id), '');
+    WHERE x.action = 'save' AND s.name = TRIM(x.name) AND s.gender IS NOT DISTINCT FROM TRIM(x.gender) AND s.date_of_birth IS NOT DISTINCT FROM x.date_of_birth AND s.fingerprint_id IS NOT DISTINCT FROM NULLIF(TRIM(x.fingerprint_id), '');
 
     IF v_duplicate_students IS NOT NULL THEN
-        RETURN jsonb_build_object(
-            'success', false, 
-            'message', 'This student''s information is already available.'
-        );
+        RETURN jsonb_build_object('success', false, 'message', 'Thông tin của sinh viên này đã có sẵn.');
     END IF;
 
-    -- 8. Xử lý các lệnh DELETE hàng loạt
     DELETE FROM public.students 
     WHERE student_id IN (
         SELECT UPPER(TRIM(student_id))
@@ -350,7 +322,6 @@ BEGIN
         WHERE action = 'delete'
     );
 
-    -- 9. Xử lý INSERT / UPDATE hàng loạt (Bulk UPSERT)
     WITH parsed_data AS (
         SELECT 
             UPPER(TRIM(student_id)) AS student_id, 
@@ -373,23 +344,18 @@ BEGIN
             fingerprint_id = EXCLUDED.fingerprint_id
         RETURNING student_id
     )
-    SELECT jsonb_agg(jsonb_build_object(
-        'student_id', student_id, 
-        'status', 'processed', 
-        'message', 'Student processed successfully'
-    )) 
+    SELECT jsonb_agg(jsonb_build_object('student_id', student_id, 'status', 'processed', 'message', 'Sinh viên đã được xử lý thành công.')) 
     INTO v_results
     FROM upserted;
 
     RETURN jsonb_build_object('success', true, 'data', COALESCE(v_results, '[]'::jsonb));
 EXCEPTION WHEN unique_violation THEN
-    RETURN jsonb_build_object('success', false, 'message', 'The fingerprint code has been duplicated elsewhere.');
+    RETURN jsonb_build_object('success', false, 'message', 'Mã vân tay đã bị trùng khớp ở nơi khác.');
 END;
 $$;
 
 -- ==========================================
--- BỔ SUNG 1: BẢNG QUERY_FINGERPRINT 
--- Cập nhật: Thêm cột status
+-- BỔ SUNG 1: BẢNG QUERY_FINGERPRINT
 -- ==========================================
 CREATE TABLE IF NOT EXISTS public.query_fingerprint (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -401,13 +367,12 @@ CREATE TABLE IF NOT EXISTS public.query_fingerprint (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Thêm cột status vào bảng đã tồn tại (nếu trước đó đã chạy file cũ)
+-- Cập nhật cột status nếu đã tạo bảng trước đó
 ALTER TABLE public.query_fingerprint 
 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending' 
 CHECK (status IN ('pending', 'waiting_scan_1', 'waiting_scan_2', 'completed', 'failed'));
 
 ALTER TABLE public.query_fingerprint ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Cho phép đọc dữ liệu query_fingerprint" ON public.query_fingerprint;
 DROP POLICY IF EXISTS "Teacher views query_fingerprint of assigned classes" ON public.query_fingerprint;
 
 CREATE POLICY "Teacher views query_fingerprint of assigned classes" ON public.query_fingerprint 
@@ -442,7 +407,7 @@ BEGIN
     SET fingerprint_data = 'Not Registered'
     WHERE NOT (fingerprint_id = ANY(sensor_ids)) OR fingerprint_data IS NULL;
 
-    RETURN jsonb_build_object('success', true, 'message', 'Fingerprint status has been successfully synchronized.');
+    RETURN jsonb_build_object('success', true, 'message', 'Trạng thái vân tay đã được đồng bộ hóa thành công.');
 END;
 $$;
 
@@ -473,15 +438,13 @@ SECURITY DEFINER
 AS $$
 BEGIN
     INSERT INTO public.device_commands (command) VALUES ('SYNC_FINGERPRINTS');
-    RETURN jsonb_build_object('success', true, 'message', 'The fingerprint synchronization request to ESP32 has been successfully sent.');
+    RETURN jsonb_build_object('success', true, 'message', 'Yêu cầu đồng bộ hóa dấu vân tay đã được gửi thành công.');
 END;
 $$;
 
 -- ==========================================
 -- BỔ SUNG 3: TÍNH NĂNG ENROLL VÂN TAY TỪ XA
 -- ==========================================
-
--- Hàm RPC dành cho App/Postman gọi để Yêu cầu Enroll (Gửi lệnh qua Realtime)
 CREATE OR REPLACE FUNCTION public.request_enroll(
     p_student_id TEXT, 
     p_fingerprint_id TEXT
@@ -491,27 +454,24 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-    -- Kiểm tra xem học sinh có tồn tại không
     IF NOT EXISTS (SELECT 1 FROM public.students WHERE student_id = p_student_id) THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Student ID not found.');
+        RETURN jsonb_build_object('success', false, 'message', 'Không tìm thấy mã số sinh viên.');
     END IF;
 
-    -- Cập nhật bảng query_fingerprint thành pending
+    -- SỬA ĐỔI TẠI ĐÂY: Khi App gọi, trạng thái tự động chuyển thành waiting_scan_1
     INSERT INTO public.query_fingerprint (student_id, name, fingerprint_id, status)
-    SELECT student_id, name, p_fingerprint_id, 'pending'
+    SELECT student_id, name, p_fingerprint_id, 'waiting_scan_1'
     FROM public.students WHERE student_id = p_student_id
     ON CONFLICT (student_id) DO UPDATE
-    SET fingerprint_id = EXCLUDED.fingerprint_id, status = 'pending';
+    SET fingerprint_id = EXCLUDED.fingerprint_id, status = 'waiting_scan_1';
 
-    -- Đẩy lệnh xuống bảng device_commands để ESP32 bắt được qua Realtime
     INSERT INTO public.device_commands (command) 
     VALUES ('ENROLL_' || p_fingerprint_id);
 
-    RETURN jsonb_build_object('success', true, 'message', 'Enrollment request sent to ESP32.', 'fingerprint_id', p_fingerprint_id);
+    RETURN jsonb_build_object('success', true, 'message', 'Yêu cầu đăng ký đã được gửi thành công.', 'fingerprint_id', p_fingerprint_id);
 END;
 $$;
 
--- Hàm RPC dành cho ESP32 gọi lại để Cập nhật trạng thái
 CREATE OR REPLACE FUNCTION public.update_enroll_status(
     p_fingerprint_id TEXT, 
     p_status TEXT, 
@@ -522,23 +482,19 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-    -- Cập nhật trạng thái (waiting_scan_1, waiting_scan_2, completed, failed)
     UPDATE public.query_fingerprint
     SET 
         status = p_status,
-        -- Nếu completed, tự động đánh dấu dữ liệu là Registered để App/Web nhận diện
         fingerprint_data = CASE WHEN p_status = 'completed' THEN 'Registered' ELSE fingerprint_data END
     WHERE fingerprint_id = p_fingerprint_id;
 
-    RETURN jsonb_build_object('success', true, 'message', 'Status updated successfully.');
+    RETURN jsonb_build_object('success', true, 'message', 'Trạng thái đã được cập nhật thành công.');
 END;
 $$;
 
 -- ==========================================
 -- BỔ SUNG 4: TÍNH NĂNG DELETE VÂN TAY TỪ XA
 -- ==========================================
-
--- 1. Hàm RPC dành cho App/Postman gọi để Yêu cầu Delete
 CREATE OR REPLACE FUNCTION public.request_delete(
     p_student_id TEXT, 
     p_fingerprint_id TEXT
@@ -548,20 +504,17 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-    -- Kiểm tra xem học sinh có tồn tại không
     IF NOT EXISTS (SELECT 1 FROM public.students WHERE student_id = p_student_id) THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Student ID not found.');
+        RETURN jsonb_build_object('success', false, 'message', 'Không tìm thấy mã số sinh viên.');
     END IF;
 
-    -- Đẩy lệnh xuống bảng device_commands để ESP32 bắt được qua Realtime
     INSERT INTO public.device_commands (command) 
     VALUES ('DELETE_' || p_fingerprint_id);
 
-    RETURN jsonb_build_object('success', true, 'message', 'Delete request sent to ESP32.', 'fingerprint_id', p_fingerprint_id);
+    RETURN jsonb_build_object('success', true, 'message', 'Yêu cầu xóa đã được gửi thành công.', 'fingerprint_id', p_fingerprint_id);
 END;
 $$;
 
--- 2. Hàm RPC dành cho ESP32 gọi để Cập nhật trạng thái sau khi Xóa
 CREATE OR REPLACE FUNCTION public.update_delete_status(
     p_fingerprint_id TEXT, 
     p_status TEXT, 
@@ -572,15 +525,109 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 BEGIN
-    -- Nếu trạng thái xóa trên phần cứng là thành công (completed)
     IF p_status = 'completed' THEN
-        -- Cập nhật bảng query_fingerprint thành Not Registered
         UPDATE public.query_fingerprint
         SET fingerprint_data = 'Not Registered'
         WHERE fingerprint_id = p_fingerprint_id;
     END IF;
 
-    RETURN jsonb_build_object('success', true, 'message', 'Delete status updated successfully.');
+    RETURN jsonb_build_object('success', true, 'message', 'Trạng thái xóa đã được cập nhật thành công.');
 END;
+$$;
+
+-- ==========================================
+-- BỔ SUNG 5: TÍNH NĂNG ĐIỂM DANH (ATTENDANCE)
+-- ==========================================
+
+-- 1. Tạo bảng Student Attendance
+CREATE TABLE IF NOT EXISTS public.student_attendance (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    student_id TEXT NOT NULL REFERENCES public.students(student_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    class_id UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+    date_of_school DATE NOT NULL,
+    time TIME NOT NULL,
+    session TEXT CHECK (session IN ('Morning', 'Afternoon', 'Evening')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Bật bảo mật RLS cơ bản
+ALTER TABLE public.student_attendance ENABLE ROW LEVEL SECURITY;
+
+-- THÊM DÒNG DROP POLICY ĐỂ TRÁNH LỖI KHI CHẠY LẠI
+DROP POLICY IF EXISTS "Teacher views attendance" ON public.student_attendance;
+
+CREATE POLICY "Teacher views attendance" ON public.student_attendance FOR SELECT TO authenticated USING (true);
+
+-- 2. Hàm RPC để ESP32 gọi khi quét vân tay điểm danh thành công
+CREATE OR REPLACE FUNCTION public.log_attendance_by_fingerprint(
+    p_fingerprint_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_student_id TEXT;
+    v_name TEXT;
+    v_class_id UUID;
+    v_session TEXT;
+    v_current_tz TIMESTAMP := NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'; -- Lấy giờ thực tế tại Việt Nam
+    v_time TIME := v_current_tz::TIME;
+    v_date DATE := v_current_tz::DATE;
+BEGIN
+    -- 1. Tìm thông tin học sinh dựa vào mã vân tay
+    SELECT student_id, name, class_id INTO v_student_id, v_name, v_class_id
+    FROM public.students
+    WHERE fingerprint_id = p_fingerprint_id
+    LIMIT 1;
+
+    -- Nếu không tìm thấy vân tay trong CSDL
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Không tìm thấy học sinh với vân tay này.');
+    END IF;
+
+    -- 2. Xác định buổi học (Session) dựa vào thời gian
+    IF v_time < '12:00:00'::TIME THEN
+        v_session := 'Morning';
+    ELSIF v_time < '18:00:00'::TIME THEN
+        v_session := 'Afternoon';
+    ELSE
+        v_session := 'Evening';
+    END IF;
+
+    -- LƯU Ý: Đã gỡ bỏ logic "Chống Spam" cũ.
+    -- Giờ đây, cứ mỗi lần ESP32 gọi hàm này là sẽ tạo ra 1 Record điểm danh mới, 
+    -- không chặn, không ghi đè dữ liệu cũ.
+    
+    -- 3. Ghi nhận điểm danh vào bảng
+    INSERT INTO public.student_attendance (student_id, name, class_id, date_of_school, time, session)
+    VALUES (v_student_id, v_name, v_class_id, v_date, v_time, v_session);
+
+    RETURN jsonb_build_object('success', true, 'message', 'Điểm danh thành công.', 'student_id', v_student_id, 'session', v_session, 'time', v_time);
+END;
+$$;
+
+-- ==========================================
+-- KÍCH HOẠT REALTIME CHO BẢNG query_fingerprint
+-- (BỔ SUNG ĐỂ APP CÓ THỂ LẮNG NGHE THAY ĐỔI TRẠNG THÁI)
+-- ==========================================
+DO $$
+BEGIN
+    -- Tạo publication nếu chưa có
+    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        CREATE PUBLICATION supabase_realtime;
+    END IF;
+
+    -- Thêm bảng query_fingerprint vào publication nếu chưa có
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' 
+          AND tablename = 'query_fingerprint'
+          AND schemaname = 'public'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.query_fingerprint;
+    END IF;
+END
 $$;
 ```
